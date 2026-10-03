@@ -1,0 +1,29 @@
+# 运行时状态与私有配置 —— 一律不进仓库
+config.json
+spoken_state.json
+*.log
+*.log.1
+*.wav
+*.jsonl
+
+# 构建产物
+build/
+sdkconfig
+sdkconfig.old
+managed_components/
+dependencies.lock
+*.bin
+*.elf
+*.map
+
+# 编辑器/系统
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/

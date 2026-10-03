@@ -1,0 +1,46 @@
+{
+  "device_name_prefix": "Hermes",
+  "target_exe_prefixes": [
+    "deepseek harness",
+    "hermes"
+  ],
+  "target_window_keys": [
+    "deepseek harness",
+    "hermes"
+  ],
+  "heartbeat_seconds": 10,
+  "speak_replies": true,
+  "speak_max_chars": 200,
+  "beep_enabled": true,
+  "speak_enabled": true,
+  "beep_interval_seconds": 3.0,
+  "beep_amp": 1200,
+  "voice_beep_freq_hz": 1760.0,
+  "voice_beep_ms": 70,
+  "reconnect_seconds": 5,
+  "voice_idle_timeout_seconds": 60.0,
+  "raw_rx_log": false,
+  "require_target_foreground": false,
+  "raise_target_before_key": true,
+  "owner_name": "Mond",
+  "device_name": "Hermes-Passport",
+  "log_verbose": false,
+  "actions": {
+    "dsh": {
+      "down.long": [
+        "tap:RETURN"
+      ],
+      "up.long": [
+        "chord:CONTROL+N"
+      ]
+    },
+    "hermes": {
+      "down.long": [
+        "tap:F8"
+      ],
+      "up.long": [
+        "chord:CONTROL+N"
+      ]
+    }
+  }
+}
