@@ -321,7 +321,24 @@ static void draw_status_bar(lv_layer_t *layer, const buddy_ui_snapshot_t *s)
         snprintf(right, sizeof(right), "%s", s->heartbeat_stale ? "休眠" : "在线");
     }
     text(layer, 8, 7, 100, s->ble_connected ? COL_INK : COL_DIM, left, false, LV_TEXT_ALIGN_LEFT);
-    text(layer, 132, 7, 100, COL_DIM, right, false, LV_TEXT_ALIGN_RIGHT);
+    /* 电池（10/04 科长定版）：像手机一样贴在**最右上角**，时间左移到它左边。
+     * 电量**只画格子不写数字** —— 一眼看格数就知道剩多少，写百分比反而和中间的
+     * 录音转圈挤在一起。电量计不应答时整块不画（宁可空着也不显示假电量）。 */
+    text(layer, 128, 7, 74, COL_DIM, right, false, LV_TEXT_ALIGN_RIGHT);
+    if (s->battery_available) {
+        unsigned pct = s->battery_percent > 100U ? 100U : s->battery_percent;
+        lv_color_t fill = pct <= 15U ? COL_RED : (pct <= 35U ? COL_YELLOW : COL_GREEN);
+        int bw = 20;
+        int bh = 11;
+        int bx = 210;
+        int by = 7;
+        int fill_w = (int)((pct * (unsigned)(bw - 4)) / 100U);
+        box(layer, bx, by, bw, bh, COL_BG, COL_DIM, 1, 1);                 /* 电池体外框 */
+        box(layer, bx + bw, by + 3, 3, bh - 6, COL_DIM, COL_DIM, 0, 1);    /* 正极帽 */
+        if (fill_w > 0) {
+            box(layer, bx + 2, by + 2, fill_w, bh - 4, fill, fill, 0, 1);  /* 电量填充 */
+        }
+    }
     rule(layer, 8, 25, 224, COL_LINE);
 }
 
@@ -518,7 +535,9 @@ static void draw_overlay(lv_layer_t *layer, const buddy_ui_snapshot_t *s)
         panel(layer, 154, 158, s->approval_locked ? COL_DIM : COL_RED, "Hermes 需要批准", body,
               s->approval_locked ? (s->permission_delivery == BUDDY_PERMISSION_DELIVERY_FAILED ? "发送失败" : "发送中...") : BUDDY_ACTION_APPROVAL);
     } else if (overlay == BUDDY_OVERLAY_MENU) {
-        static const char *const menu[] = {"设置", "关机", "关于", "关闭"};
+        /* 「关机」名不符实（10/04 科长反馈）：它只关背光，CPU 与蓝牙照常跑，任意键
+         * 即可唤醒 —— 所以文案改成「息屏」。真·断电走硬件电源键。 */
+        static const char *const menu[] = {"设置", "息屏", "关于", "关闭"};
         unsigned i;
         box(layer, 38, 48, 164, 224, lv_color_hex(0x151719), COL_INK, 2, 5);
         text(layer, 52, 61, 136, COL_INK, "菜单", true, LV_TEXT_ALIGN_CENTER);

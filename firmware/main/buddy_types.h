@@ -114,6 +114,10 @@ typedef enum {
     BUDDY_EVENT_PERMISSION_SEND_RESULT,
     BUDDY_EVENT_KEY_CLICK,
     BUDDY_EVENT_KEY_LONG,
+    /* 双击（10/04）：目前只用于「下键双击 = 往下翻一条历史」，见 buddy_state.c 同名分支。
+     * ⚠ 单独立一种事件、不复用 CLICK —— 桥侧 keymap 只认 click/long，复用会让桥
+     *   把这一下也当成一次翻页送进 Hermes，凭空多翻一次。 */
+    BUDDY_EVENT_KEY_DOUBLE,
     BUDDY_EVENT_TICK,
     BUDDY_EVENT_TEXT,
     BUDDY_EVENT_AUDIO,

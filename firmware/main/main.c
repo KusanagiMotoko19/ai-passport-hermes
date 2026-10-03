@@ -340,7 +340,16 @@ static void on_key(bsp_btn_t button, bsp_btn_ev_t event, void *context)
     buddy_control_event_t control = {0};
 
     (void)context;
-    if ((event != BSP_BTN_CLICK && event != BSP_BTN_LONG) || s_button_queue == NULL) {
+    /* 双击（10/04 科长定）：**下键单击 = 往上翻**（翻到更旧的一条），
+     * **下键双击 = 往下翻**（翻回较新的一条）。一个下键就能把 10 条记录上下翻完。
+     * ⚠ 不再把双击改写成「上键单击」——那条路会把 up/click 一并发给桥，桥再往
+     *   Hermes 注入一次上翻，凭空多动一次。现在双击用自己的事件类型，只在本机生效
+     *   （buddy_report_key 只认 CLICK/LONG，DOUBLE 天然不上报）。 */
+    if (event == BSP_BTN_DOUBLE && button != BSP_BTN_DOWN) {
+        return;                 /* 其余键的双击仍然丢弃 */
+    }
+    if ((event != BSP_BTN_CLICK && event != BSP_BTN_LONG && event != BSP_BTN_DOUBLE) ||
+        s_button_queue == NULL) {
         return;
     }
     /* 单击 OK：不再在设备端本地开录，直接落到下面的上报路径 ——
@@ -491,9 +500,19 @@ static bool buddy_key_matches_state(const buddy_control_event_t *control,
 /* --- Hermes 扩展:把 snapshot 里的显示类设置落到硬件 ---------------------
  * 灯效 = 背光呼吸/脉冲(LEDC PWM 调光,不占额外内存;纯 BSP 调用,不依赖 LVGL)。
  * 钟向(屏幕旋转)放在 buddy_ui.c —— 那里已持有 LVGL 锁。 */
+/* 息屏冻结标志（10/04 修）：只把背光设 0 是不够的 —— buddy_render() 每帧都会调用
+ * 本函数，而默认灯效 led_effect=1（呼吸）会把背光在 10~100% 之间扫，0% 立刻被覆盖，
+ * 表现为「点了息屏屏幕不灭」（科长 10/04 实测）。息屏期间这里每帧强制归零，压过灯效；
+ * 唤醒（BUDDY_ACTION_DISPLAY_BACKLIGHT）时清除。 */
+static bool s_screen_off;
+
 static void buddy_apply_display_settings(const buddy_ui_snapshot_t *snap, uint64_t now_ms)
 {
     if (snap == NULL) {
+        return;
+    }
+    if (s_screen_off) {
+        bsp_display_backlight(0);
         return;
     }
     /* 灯效:0=关(交回亮度设置) 1=呼吸 2=脉冲 3=常亮 */
@@ -649,6 +668,17 @@ static void buddy_audio_task(void *context)
         }
 
         got = buddy_ble_audio_read(raw, sizeof(raw));
+        /* ⚠ 溢出必须在解码之前处理（10/04）：环形缓冲满过一次 = 音频流中间少了若干
+         * 字节，而 IMA-ADPCM 是**有状态差分编码** —— 解码器的预测值/步长和编码端从此
+         * 错开，继续解码会把预测误差外推成满量程尖峰，也就是用户听到的那声
+         * 「突然很巨大 + 毛刺」。这里直接清零解码状态，并**丢掉手里这批已经不可信的
+         * 数据**：宁可静音几毫秒，也不要一声爆响。 */
+        if (buddy_ble_audio_take_overflow()) {
+            ESP_LOGW(TAG, "音频溢出：丢弃 %u 字节并重置 ADPCM 状态（累计 %lu 次）",
+                     (unsigned)got, (unsigned long)buddy_ble_audio_overruns());
+            buddy_adpcm_reset(&adpcm);
+            got = 0U;                      /* 这批数据按「没收到」处理 */
+        }
         if (got == 0U) {
             if (!buddy_ble_audio_receiving()) {
                 s_audio_playing = false;
@@ -832,6 +862,8 @@ static bool buddy_translate_key(const buddy_control_event_t *control, buddy_even
         event->type = BUDDY_EVENT_KEY_CLICK;
     } else if (control->data.key.event == BSP_BTN_LONG) {
         event->type = BUDDY_EVENT_KEY_LONG;
+    } else if (control->data.key.event == BSP_BTN_DOUBLE) {
+        event->type = BUDDY_EVENT_KEY_DOUBLE;
     } else {
         return false;
     }
@@ -1222,11 +1254,16 @@ static bool buddy_execute_action(buddy_state_t *state, const buddy_action_t *act
         return false;
     }
     if (action->type == BUDDY_ACTION_DISPLAY_BACKLIGHT) {
+        s_screen_off = false;          /* 唤醒/调亮度：解除息屏冻结 */
+        ESP_LOGI(TAG, "action DISPLAY_BACKLIGHT：解除冻结 -> %u%%",
+                 (unsigned)action->brightness_percent);
         bsp_display_backlight(action->brightness_percent);
         memset(result_event, 0, sizeof(*result_event));
         return false;
     }
     if (action->type == BUDDY_ACTION_SCREEN_OFF) {
+        s_screen_off = true;           /* 见 s_screen_off 注释：不设它会立刻被呼吸灯覆盖 */
+        ESP_LOGI(TAG, "action SCREEN_OFF：冻结背光到 0%%（s_screen_off=1）");
         bsp_display_backlight(0);
         memset(result_event, 0, sizeof(*result_event));
         return false;

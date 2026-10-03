@@ -306,6 +306,10 @@ void buddy_state_push_history(buddy_state_t *state, const char *body)
 static void buddy_normal_click(buddy_state_t *state, buddy_key_t key,
                                buddy_action_t *action)
 {
+    /* ⚠ 息屏意图不能就地写进 action（见下方 TURN_OFF 分支注释），用这个标志兜到
+     *   buddy_set_ui_refresh() 之后再覆盖回去。 */
+    bool screen_off_requested = false;
+
     if (state->menu_open) {
         if (key == BUDDY_KEY_UP) {
             state->menu_selection = (buddy_menu_item_t)(
@@ -319,9 +323,14 @@ static void buddy_normal_click(buddy_state_t *state, buddy_key_t key,
                 state->settings_selection = BUDDY_SETTINGS_BRIGHTNESS;
             } else if (state->menu_selection == BUDDY_MENU_TURN_OFF) {
                 state->screen_off = true;
-                if (action != NULL) {
-                    action->type = BUDDY_ACTION_SCREEN_OFF;
-                }
+                /* ⚠ 不能就地写 action->type：本分支末尾那句无条件执行的
+                 *   buddy_set_ui_refresh(action) 会把它覆盖成 UI_REFRESH，
+                 *   于是 BUDDY_ACTION_SCREEN_OFF 永远送不到 main.c —— 表现就是
+                 *   「菜单里点息屏，屏幕不灭」（10/04 实测定案：串口日志里从来没有
+                 *   action SCREEN_OFF，却能看到按 OK 唤醒时打的 DISPLAY_BACKLIGHT）。
+                 *   正确顺序与本文件 buddy_settings_click 一致：先记意图，
+                 *   UI_REFRESH 之后再覆盖回来。 */
+                screen_off_requested = true;
             } else if (state->menu_selection == BUDDY_MENU_ABOUT) {
                 /* 「关于」= 署名 + 致谢 + 许可（信息页第 1 页，见 buddy_ui.c draw_info） */
                 state->page = BUDDY_PAGE_INFO;
@@ -330,20 +339,27 @@ static void buddy_normal_click(buddy_state_t *state, buddy_key_t key,
             state->menu_open = false;
         }
         buddy_set_ui_refresh(action);
+        if (screen_off_requested && action != NULL) {
+            action->type = BUDDY_ACTION_SCREEN_OFF;   /* 覆盖回息屏（见上方注释） */
+        }
         return;
     }
     if (state->page == BUDDY_PAGE_SETTINGS) {
         buddy_settings_click(state, key, action);
         return;
     }
-    /* 上下键（科长 10/03 晚定）：一个键管两件事 —— 先翻页看正文，翻到头再切功能。
-     *   ▼：正文没到底 → 往下滚一屏；到底了 → 翻到**上一条对话**（最近 10 条循环）
-     *   ▲：正文没到顶 → 往上滚；到顶了 → 返回首页
-     * 这样「看长正文」和「翻历史 / 回首页」都不需要额外的键，也不会互相挤掉。 */
+    /* 上下键（10/04 定版）：一个下键管双向翻历史，上键负责正文和回首页。
+     *   ▼ 单击：**直接翻上一条**（更旧的，最近 10 条循环）
+     *   ▼ 双击：**直接翻下一条**（较新的，见上面 BUDDY_EVENT_KEY_DOUBLE 分支）
+     *   ▲ 单击：正文没到顶 → 往上滚；到顶了 → 返回首页
+     * 原来"单击先滚正文、到底才翻页"那套已经去掉 —— 屏上只有摘要，滚不出东西，
+     * 白白让第一下按键看着像没反应。 */
     if (key == BUDDY_KEY_DOWN) {
-        if (!buddy_ui_text_at_bottom()) {
-            buddy_ui_request_text_scroll(1);
-        } else if (state->body_history_count > 1U) {
+        /* 10/04 科长定：单击下键 = **直接翻上一条**，不再"先滚正文、到底才翻页"。
+         * 理由：屏上显示的都是一屏装得下的摘要（桥的 extract_card 已经截过一轮），
+         * 「先滚一屏」这一步基本是空动作，只会让第一下按下去像是没反应、还要按两下。
+         * 长正文的回滚仍然保留在 ▲（见下面 BUDDY_KEY_UP 分支）。 */
+        if (state->body_history_count > 1U) {
             /* 翻到上一条：**顺便切到正文页** —— 首页正文区只有 3 行（头像占了上半屏），
              * 留在首页等于翻了也看不见（科长 10/03 报「在主屏幕点下键没有反应」）。
              * 正文页能滚动看全，再按 ▲ 就回首页。 */
@@ -741,7 +757,47 @@ void buddy_state_reduce(buddy_state_t *state, const buddy_event_t *event,
             buddy_normal_click(state, event->key, action);
         }
         break;
+    case BUDDY_EVENT_KEY_DOUBLE:
+        /* 双击下键 = 往下翻一条历史（10/04 科长定：单击往上翻、双击往下翻，
+         * 一个下键就能把 10 条记录上下翻完）。只认「下键 + 正文/首页」这一种组合：
+         * 菜单、设置、审批、息屏唤醒等上下文一概不碰，免得凭空多做动作。 */
+        if (state->screen_off) {
+            state->screen_off = false;
+            if (action != NULL) {
+                action->type = BUDDY_ACTION_DISPLAY_BACKLIGHT;
+                action->brightness_percent =
+                    (uint8_t)(20U + state->brightness_level * 20U);
+            }
+            break;
+        }
+        if (event->key == BUDDY_KEY_DOWN && !state->menu_open &&
+            state->page != BUDDY_PAGE_SETTINGS &&
+            state->confirmation == BUDDY_CONFIRM_NONE && !buddy_has_prompt(state) &&
+            state->body_history_count > 1U) {
+            /* 往回走一条：用 +count-1 取模，避免 uint8 减到 0 以下翻不回来。 */
+            state->body_history_pos = (uint8_t)(
+                (state->body_history_pos + state->body_history_count - 1U) %
+                state->body_history_count);
+            buddy_copy(state->body, sizeof(state->body),
+                       state->body_history[state->body_history_pos]);
+            buddy_ui_text_reset();
+            state->page = BUDDY_PAGE_TRANSCRIPT;
+        }
+        buddy_set_ui_refresh(action);
+        break;
     case BUDDY_EVENT_KEY_LONG:
+        /* ⚠ 息屏后长按也要能唤醒（10/04 实测踩坑）：以前只有 KEY_CLICK 分支检查
+         * screen_off，于是黑屏时按住 OK 只会「打开菜单」（菜单在黑屏下看不见），
+         * 屏幕永远不亮 —— 表现为「按 OK 什么都没反应」。 */
+        if (state->screen_off) {
+            state->screen_off = false;
+            if (action != NULL) {
+                action->type = BUDDY_ACTION_DISPLAY_BACKLIGHT;
+                action->brightness_percent =
+                    (uint8_t)(20U + state->brightness_level * 20U);
+            }
+            break;
+        }
         if (event->key == BUDDY_KEY_OK && state->confirmation == BUDDY_CONFIRM_NONE &&
             !buddy_has_prompt(state)) {
             state->menu_open = !state->menu_open;

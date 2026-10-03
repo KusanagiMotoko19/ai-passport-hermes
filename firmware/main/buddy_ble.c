@@ -357,6 +357,11 @@ static volatile size_t s_audio_head;
 static volatile size_t s_audio_tail;
 static uint32_t s_audio_remaining;
 static volatile bool s_audio_receiving;
+/* 10/04：环形缓冲「满了丢字节」的痕迹。丢一个字节 = ADPCM 解码器状态与编码端错开，
+ * 后续采样会被外推成满量程尖峰（用户报的「突然巨响 + 毛刺」）。这里只记账，
+ * 由音频泵在继续解码之前清掉解码器状态 —— 见 buddy_ble_audio_take_overflow。 */
+static volatile bool s_audio_overflow;
+static volatile uint32_t s_audio_overruns;
 /* 声明帧带来的播放参数：16kHz IMA-ADPCM 是 8KB/s，与 8kHz u-law 同带宽但音质好得多。 */
 static uint32_t s_audio_rate = 8000U;
 static bool s_audio_adpcm = false;
@@ -413,6 +418,20 @@ size_t buddy_ble_audio_read(uint8_t *destination, size_t max_bytes)
     return copied;
 }
 
+/* 「自上次查询以来丢过字节吗」—— 读后即清。音频泵每轮解码前先问这一句。 */
+bool buddy_ble_audio_take_overflow(void)
+{
+    bool had = s_audio_overflow;
+    s_audio_overflow = false;
+    return had;
+}
+
+/* 累计溢出次数（诊断：打印出来就知道这段播报到底丢没丢过）。 */
+uint32_t buddy_ble_audio_overruns(void)
+{
+    return s_audio_overruns;
+}
+
 /* BLE 回调内消费：环形缓冲满了就丢弃，绝不阻塞 BLE 任务。 */
 static void buddy_audio_consume(const uint8_t *data, size_t length)
 {
@@ -422,6 +441,12 @@ static void buddy_audio_consume(const uint8_t *data, size_t length)
         if (next != s_audio_tail) {
             s_audio_ring[s_audio_head] = data[i];
             s_audio_head = next;
+        } else if (!s_audio_overflow) {
+            /* 满了：这一批字节只能丢。记一笔（每轮溢出只记一次，免得刷屏），
+             * 音频泵会据此重置 ADPCM 解码状态 —— 否则拿着错位数据继续解码，
+             * 预测误差会被外推成满量程尖峰，也就是那声爆响。 */
+            s_audio_overflow = true;
+            ++s_audio_overruns;
         }
         --s_audio_remaining;
     }

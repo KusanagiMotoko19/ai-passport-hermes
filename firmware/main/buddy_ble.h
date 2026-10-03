@@ -33,6 +33,11 @@ bool buddy_ble_mic_active(void);
 uint32_t buddy_ble_audio_rate(void);
 bool buddy_ble_audio_is_adpcm(void);
 size_t buddy_ble_audio_read(uint8_t *destination, size_t max_bytes);
+/* 环形缓冲溢出（满了只能丢字节）的检测。ADPCM 是有状态差分编码，丢一个字节就会让
+ * 解码器的预测值/步长与编码端错开，后续采样被外推成满量程尖峰 —— 听感就是
+ * 「突然巨响 + 毛刺」。音频泵必须在继续解码之前先查这个标志（读后即清）。 */
+bool buddy_ble_audio_take_overflow(void);
+uint32_t buddy_ble_audio_overruns(void);
 
 typedef enum {
     BUDDY_BLE_EVENT_CONNECTED,
