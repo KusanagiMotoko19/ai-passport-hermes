@@ -3,12 +3,16 @@ CONFIG_IDF_TARGET="esp32c3"
 # 注:ESP32-C3 无 PSRAM,故不设 CONFIG_SPIRAM。
 
 # --- Flash ---
-# 取 4MB:镜像头里的 flash 大小若【大于】芯片实际容量,启动时 esp_flash_init_default_chip
-# 探测失败会 assert 进而无限重启;反之(头 ≤ 实际)正常。开源硬件用户手上可能是 4MB 或
-# 8MB 批次,取 4MB 则同一份产物两种板子都能启动。
-CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
-# 烧录时按实际探测容量回写镜像头,进一步保证兼容。
-CONFIG_ESPTOOLPY_HEADER_FLASHSIZE_UPDATE=y
+# 取 8MB：官方发布门禁（tools/verify_firmware.py）要求 flash_args 明确声明 8 MB，
+# 不认 detect / 4MB；官方板卡批次是 8MB，本地刷机脚本 idf-flash-safe.bat 也一直用
+# --flash_size 8MB。⚠ 若你的板子是 4MB 批次，启动时 esp_flash_init_default_chip 会因
+# 「镜像头声明 > 芯片实际容量」而 assert 无限重启 —— 那种板子要改回 4MB（自用变体，
+# 过不了社区门禁）。
+CONFIG_ESPTOOLPY_FLASHSIZE_8MB=y
+# ⚠ 必须为 n：置 y 会让 idf.py 把 flash_args 写成 `--flash_size detect`，而官方发布门禁
+# （tools/verify_firmware.py）不认 detect、要求明确声明 8 MB。官方 sdkconfig.defaults 同样
+# 关掉它并注释「固定 8MB 镜像头，关闭 detect，便于 idf.py merge-bin」。
+CONFIG_ESPTOOLPY_HEADER_FLASHSIZE_UPDATE=n
 CONFIG_PARTITION_TABLE_SINGLE_APP_LARGE=y
 
 # --- 控制台:USB-Serial-JTAG(C3 原生 USB,GPIO18/19)---
@@ -22,9 +26,13 @@ CONFIG_LV_FONT_MONTSERRAT_14=y
 CONFIG_LV_FONT_MONTSERRAT_20=y
 CONFIG_LV_FONT_UNSCII_16=y
 CONFIG_LV_FONT_UNSCII_8=y
-# LVGL 内置 malloc 池大小(KB)。它是独立静态区、不与系统堆共享,配大了会白白占用 RAM。
-# 本 demo UI 简单,24KB 足够;若自建复杂界面出现绘制卡死/看门狗,调大此值。
-CONFIG_LV_MEM_SIZE_KILOBYTES=32
+# LVGL 内置 malloc 池大小（**字节**）。它是独立静态区、不与系统堆共享，配大了会白白占 RAM，
+# 而 C3 的 RAM 还要留给 BLE controller：实测配 64KB 时启动日志是
+#   E BLE_INIT: hci inits failed → nimble host init failed → BLE initialization failed
+# （堆 free=52KB 但最大连续块只有 31KB，controller 起不来）；32KB 正常。
+# ⚠ 真正生效的 Kconfig 项是 LV_MEM_SIZE（字节）；LV_MEM_SIZE_KILOBYTES 已 DEPRECATED
+#   （默认 0，写进去也不生效 —— 10/04 就是踩了这个坑，写了 32 却仍按 64KB 编）。
+CONFIG_LV_MEM_SIZE=32768
 
 # --- 系统 ---
 CONFIG_FREERTOS_HZ=1000

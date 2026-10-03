@@ -876,7 +876,9 @@ class Bridge:
                 #   顺序讲究：必须在补推当前正文**之后** —— 设备的 push 是「新的在前」，
                 #   重放是旧→新，最后落地的那条才会成为 history[0]（最新）。
                 await self._replay_history()
-                while client.is_connected and not self.stop_flag.is_set():
+                # ⚠ 判据用 _link_alive（不能只看 client.is_connected，见其注释）：
+                #   否则 WinRT 误报 False 时内层退出，events 队列没人消费 → mic_start 发不出去。
+                while self._link_alive(client) and not self.stop_flag.is_set():
                     # 兜底①：开录后一直「没人说话」（没有任何音频，或只有底噪）→ 自动关麦 +
                     # 两声「滴滴」（科长 10/03 定）。⚠ 判据是 **RMS 过线的说话时刻**，不是
                     # 「有没有字节」——设备一开麦就持续推流底噪，只看字节永远等不到超时。
@@ -949,11 +951,13 @@ class Bridge:
             except Exception as exc:  # noqa: BLE001
                 log(f"BLE 会话异常: {exc}")
             finally:
+                # ⚠ 无条件断开：以前按 is_connected 判断再断，而 WinRT 会误报 False ——
+                #   旧 client 就不断开、notify 回调继续收（按键还能进），设备又因为
+                #   **还连着**而不再广播，外层于是永远「没扫到设备」。断开失败也不致命。
                 if self.client is not None:
                     try:
-                        if self.client.is_connected:
-                            await self.client.disconnect()
-                    except Exception:  # noqa: BLE001
+                        await self.client.disconnect()
+                    except Exception:                       # noqa: BLE001
                         pass
                     self.client = None
             if not self.stop_flag.is_set():
@@ -986,9 +990,28 @@ class Bridge:
         if sent:
             log(f"历史补推：已重放 {sent} 条摘要（翻页历史已恢复）")
 
+    def _link_alive(self, client=None) -> bool:
+        """链路是否可用。
+
+        ⚠ 不能只看 `BleakClient.is_connected`：WinRT 后端会在链路仍活着时误报 False
+        （10/03 晚 22:12 之后实测：桥认为「没连上」在外层空转扫描，而设备的按键通知
+        仍在到达）。一旦据此判定「未连接」，events 队列就没人消费（mic_start 永远发不
+        出去）、设备又因为**还连着**而不再广播（外层永远「没扫到设备」）→ 用户表现为
+        「按 OK 收不到音」。所以活性判据 = bleak 说连着 **或** 最近 20 秒收到过 notify。
+        """
+        target = client if client is not None else self.client
+        if target is None:
+            return False
+        try:
+            if target.is_connected:
+                return True
+        except Exception:                                   # noqa: BLE001
+            pass
+        return bool(self.last_rx) and (time.time() - self.last_rx) < 20.0
+
     async def _send(self, payload: bytes) -> None:
         client = self.client
-        if client is None or not client.is_connected:
+        if client is None or not self._link_alive(client):
             raise RuntimeError("设备未连接")
         char = client.services.get_characteristic(NUS_RX_UUID)
         limit = max(20, int(getattr(char, "max_write_without_response_size", 20) or 20))

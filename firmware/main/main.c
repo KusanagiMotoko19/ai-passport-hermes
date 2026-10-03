@@ -1615,10 +1615,15 @@ void app_main(void)
         return;
     }
     bsp_display_backlight(100);
-    /* FAP_SCREENSHOT_V1 串口截屏监听（只读观察，抓帧不占帧缓冲）。 */
+    /* FAP_SCREENSHOT_V1 串口截屏监听（只读观察，抓帧不占帧缓冲）。
+     * ⚠ 诊断开关（10/04）：这个任务的读任务与 console 日志抢同一条 CDC 流，
+     *   会把启动日志整个吞掉（主机读串口永远是 0 字节）。
+     *   抓启动日志时置 0；平时置 1 —— 置 0 就等于放弃截屏能力。 */
+#if 1  /* ⚠ 诊断期临时改为 0：抓完启动日志必须改回 1 并重刷 */
     if (fap_screenshot_start() != ESP_OK) {
         ESP_LOGW(TAG, "screenshot listener unavailable");
     }
+#endif
     s_initial_battery_available = bsp_battery_init() == ESP_OK;
 
     if (buddy_settings_init() != ESP_OK || buddy_settings_load(&s_initial_settings) != ESP_OK) {

@@ -331,6 +331,11 @@ static void buddy_normal_click(buddy_state_t *state, buddy_key_t key,
                  *   正确顺序与本文件 buddy_settings_click 一致：先记意图，
                  *   UI_REFRESH 之后再覆盖回来。 */
                 screen_off_requested = true;
+            } else if (state->menu_selection == BUDDY_MENU_KEYS) {
+                /* 按键说明（10/04 科长：记不清各键作用）——信息页第 2 页，
+                 * 文案见 buddy_ui.c draw_info 的 case 1。退出：OK 或 ▲ 回首页。 */
+                state->page = BUDDY_PAGE_INFO;
+                state->info_page = 1;
             } else if (state->menu_selection == BUDDY_MENU_ABOUT) {
                 /* 「关于」= 署名 + 致谢 + 许可（信息页第 1 页，见 buddy_ui.c draw_info） */
                 state->page = BUDDY_PAGE_INFO;

@@ -54,8 +54,10 @@ typedef enum {
 typedef enum {
     BUDDY_MENU_SETTINGS,
     BUDDY_MENU_TURN_OFF,
-    /* 「帮助」「演示」已按科长 10/03 要求删除：
-     *   帮助页内容早已过时、演示（宠物动画）没人看。 */
+    /* 「演示」已按科长 10/03 要求删除（宠物动画没人看）。
+     * 「按键」= 10/04 科长要求加回的**按键速查页**（信息页第 2 页）：
+     *   他记不清三枚键各是什么作用，菜单里要能一眼查到。 */
+    BUDDY_MENU_KEYS,
     BUDDY_MENU_ABOUT,
     BUDDY_MENU_CLOSE,
     BUDDY_MENU_COUNT,

@@ -404,7 +404,7 @@ static void draw_info(lv_layer_t *layer, const buddy_ui_snapshot_t *s)
     char body[512];
     unsigned p = s->info_page < 6 ? s->info_page : 0;
     text(layer, 14, 38, 180, COL_INK, titles[p], true, LV_TEXT_ALIGN_LEFT);
-    /* 「帮助」入口已删：信息页实际只有第 1 页（关于）可达，不再显示页码 */
+    /* 10/04：菜单里「按键」直达第 2 页（titles[1]）、「关于」第 1 页，两页都可达。 */
     rule(layer, 14, 66, 212, COL_LINE);
     switch (p) {
     case 0: snprintf(body, sizeof(body),
@@ -416,7 +416,23 @@ static void draw_info(lv_layer_t *layer, const buddy_ui_snapshot_t *s)
                      "许可  APACHE-2.0\n\n"
                      /* 编译期烙进去：出问题时报这个日期给 Hermes，不用猜设备跑的是哪一版固件 */
                      "固件  " __DATE__ " " __TIME__); break;
-    case 1: snprintf(body, sizeof(body), "上     切换屏幕\n下     翻页 / 拒绝\n确定   批准 / 修改\n长按   打开菜单"); break;
+    /* 按键速查（10/04 科长要求）：一屏装得下，写的是**当前固件真实键位** ——
+     * 不要再抄上游 claude-buddy 那套（上=切换屏幕、确定=修改，早就不是了）。
+     * 版面：正文区 y=82 起、行距 21px、宽 208px（中文约 13 字/行）→ 最多 11 行。
+     * ⚠ 只用字体里**确实有**的字形：▲ 有，▼ 与 · 没有（字体按 GB2312 字符集生成，
+     *   这两个码点不在集合里，画出来是空白）→ 上下键一律写作「上键 / 下键」。 */
+    case 1: snprintf(body, sizeof(body),
+                     "首页 / 正文\n"
+                     "OK 单击    对 Hermes 说话\n"
+                     "OK 长按    打开菜单\n"
+                     "上键单击   上滚 / 回首页\n"
+                     "下键单击   看更早一条\n"
+                     "下键双击   看更新一条\n"
+                     "菜单 / 设置\n"
+                     "上下键     选择\n"
+                     "OK         进入 / 切换\n"
+                     "审批窗口\n"
+                     "OK 批准    下键拒绝"); break;
     case 2: snprintf(body, sizeof(body), "会话     %u\n运行     %u\n等待     %u\n\n词元     %llu", s->total, s->running, s->waiting, (unsigned long long)s->tokens); break;
     case 3: snprintf(body, sizeof(body), "名称\n%s\n\n归属\n%s\n\n屏幕     240 X 320", s->name[0] ? s->name : "Hermes 伙伴", s->owner[0] ? s->owner : "-"); break;
     case 4: snprintf(body, sizeof(body), "%s\n\n%s\n%s\n\n在 Windows 蓝牙中\n添加设备完成配对", s->name[0] ? s->name : "Hermes-伙伴", s->ble_connected ? "已连接" : "广播中", s->ble_encrypted ? "已加密" : "未加密"); break;
@@ -537,7 +553,7 @@ static void draw_overlay(lv_layer_t *layer, const buddy_ui_snapshot_t *s)
     } else if (overlay == BUDDY_OVERLAY_MENU) {
         /* 「关机」名不符实（10/04 科长反馈）：它只关背光，CPU 与蓝牙照常跑，任意键
          * 即可唤醒 —— 所以文案改成「息屏」。真·断电走硬件电源键。 */
-        static const char *const menu[] = {"设置", "息屏", "关于", "关闭"};
+        static const char *const menu[] = {"设置", "息屏", "按键", "关于", "关闭"};
         unsigned i;
         box(layer, 38, 48, 164, 224, lv_color_hex(0x151719), COL_INK, 2, 5);
         text(layer, 52, 61, 136, COL_INK, "菜单", true, LV_TEXT_ALIGN_CENTER);

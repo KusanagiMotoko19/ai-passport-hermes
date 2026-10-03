@@ -29,6 +29,33 @@ static esp_err_t buddy_orchestrator_send_json(const buddy_orchestrator_ops_t *op
     return ops->send(ops->context, json, (size_t)length, generation);
 }
 
+/* 设备侧自己处理、不在协议命令表里的命令（main.c 的 buddy_try_volume/settings/
+ * history_command，以及 buddy_ble.c 嗅探的 mic_start/mic_stop）。它们**已经被处理过了**，
+ * 只是通用解析器不认 —— 以前这里会回一条
+ *   {"ack":"settings","ok":false,"error":"unknown command"}
+ * 于是桥日志里满屏假的失败回执（10/03 记的「噪音」）。现在回 ok=true 当送达确认。 */
+static bool buddy_is_device_side_command(const char *name)
+{
+    static const char *const known[] = {
+        "settings",
+        "history_add",
+        "mic_start",
+        "mic_stop",
+        "volume",
+    };
+    size_t i;
+
+    if (name == NULL || name[0] == '\0') {
+        return false;
+    }
+    for (i = 0; i < sizeof(known) / sizeof(known[0]); ++i) {
+        if (strcmp(name, known[i]) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
 static esp_err_t buddy_orchestrator_send_ack(const buddy_orchestrator_ops_t *ops,
                                              const char *command, bool ok,
                                              const char *error, uint32_t generation)
@@ -57,13 +84,19 @@ bool buddy_orchestrator_process_rx(buddy_state_t *state,
     parsed = buddy_protocol_parse(json, length, &event);
     if (parsed < BUDDY_EVENT_NONE) {
         if (event.command.name[0] != '\0') {
-            const char *error = parsed == BUDDY_EVENT_UNSUPPORTED_COMMAND
-                                    ? "unsupported in phase 1"
-                                    : (parsed == BUDDY_EVENT_UNKNOWN_COMMAND
-                                           ? "unknown command"
-                                           : "invalid request");
-            (void)buddy_orchestrator_send_ack(ops, event.command.name, false, error,
-                                              connection_generation);
+            if (buddy_is_device_side_command(event.command.name)) {
+                /* 已由 main.c 的预处理处理掉，这里只回送达确认，别再报 unknown */
+                (void)buddy_orchestrator_send_ack(ops, event.command.name, true, NULL,
+                                                  connection_generation);
+            } else {
+                const char *error = parsed == BUDDY_EVENT_UNSUPPORTED_COMMAND
+                                        ? "unsupported in phase 1"
+                                        : (parsed == BUDDY_EVENT_UNKNOWN_COMMAND
+                                               ? "unknown command"
+                                               : "invalid request");
+                (void)buddy_orchestrator_send_ack(ops, event.command.name, false, error,
+                                                  connection_generation);
+            }
         }
         return false;
     }
