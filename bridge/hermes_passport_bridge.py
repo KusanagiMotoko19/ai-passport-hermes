@@ -1563,6 +1563,33 @@ class Bridge:
             self.stop_flag.set()
 
 
+SINGLETON_LOCK = os.path.join(HERE, "bridge.lock")
+
+
+def _acquire_singleton() -> bool:
+    """单实例守卫：已经有桥在跑就让本进程退出。
+
+    ⚠ 为什么必须有：**两个桥实例会抢同一条 BLE 连接** —— 症状是设备反复
+    「已断开」、按 OK 收不到音频（10/03 夜里实测：手动启动与看门狗撞车，
+    跑出 4 个进程抢一条链路，界面全乱）。看门狗那边也做了多实例清理，
+    这里是最后一道。
+    """
+    try:
+        if os.path.exists(SINGLETON_LOCK):
+            with open(SINGLETON_LOCK, encoding="utf-8") as fh:
+                other = int((fh.read() or "0").strip() or 0)
+            if other and other != os.getpid() and psutil.pid_exists(other):
+                return False
+    except Exception:                                   # noqa: BLE001
+        pass
+    try:
+        with open(SINGLETON_LOCK, "w", encoding="utf-8") as fh:
+            fh.write(str(os.getpid()))
+    except OSError:
+        pass
+    return True
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="AI Passport <-> Hermes/DSH 桥")
     parser.add_argument("--scan", action="store_true", help="只扫描 BLE 设备并退出")
@@ -1570,6 +1597,11 @@ def main() -> int:
     parser.add_argument("--voice-test", type=float, default=0.0,
                         help="诊断：连接后自动开录 N 秒（免按键），随后转写并注入")
     args = parser.parse_args()
+
+    # 单实例守卫（`--scan` 这类只读诊断放行）
+    if not args.scan and not _acquire_singleton():
+        log("已有一个桥在运行（bridge.lock）—— 两个实例会抢同一条 BLE 连接，本进程退出")
+        return 0
 
     cfg = load_config()
     if args.verbose:
