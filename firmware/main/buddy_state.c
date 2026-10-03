@@ -280,7 +280,7 @@ static void buddy_settings_click(buddy_state_t *state, buddy_key_t key,
 
     /* 10/03 晚：把新收到的正文压进历史（环形，最新的在 [0]）。
      * ▼ 短按翻对话就在这个数组里走；同一条不重复占位（Hermes 压缩会重发同一段）。 */
-static void buddy_history_push(buddy_state_t *state, const char *body)
+void buddy_state_push_history(buddy_state_t *state, const char *body)
 {
     unsigned fill;
     unsigned i;
@@ -606,7 +606,7 @@ void buddy_state_reduce(buddy_state_t *state, const buddy_event_t *event,
         /* 收到 Hermes 回复正文：存下、压进历史、自动切到转录页。
          * 新正文 = 回到最新一条（不管刚才翻在第几条），滚动也拉回开头。 */
         buddy_copy(state->body, sizeof(state->body), event->text.body);
-        buddy_history_push(state, event->text.body);
+        buddy_state_push_history(state, event->text.body);
         state->body_history_pos = 0U;
         buddy_ui_text_reset();
         state->page = BUDDY_PAGE_TRANSCRIPT;

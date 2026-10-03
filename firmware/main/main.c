@@ -15,6 +15,8 @@
 #include "esp_timer.h"
 #include "nvs_flash.h"
 
+#include "cJSON.h"      /* history_add 命令解析（桥补推历史，见 buddy_try_history_command） */
+
 #include "bsp_audio.h"
 #include "bsp_battery.h"
 #include "bsp_button.h"
@@ -1351,6 +1353,37 @@ static void buddy_try_volume_command(const char *line, size_t length)
 
 /* {"cmd":"settings","speak":true,"beep":false} —— 桥把开关状态推下来（10/03 晚）。
  * 桥是「播报/提示音」的执行者，所以以它为准：设备菜单只是遥控器，避免两边显示打架。 */
+/* 10/03 晚：桥在 BLE 连接建立后会把最近几条**摘要**逐条补推下来，
+ * 只为把设备的翻页历史填回去（设备重启会清空）—— 不切页面、不动当前正文。
+ * 命令：{"cmd":"history_add","body":"…"}\n
+ * 桥按「从旧到新」的顺序发，最后一条自然成为 history[0]（最新）。 */
+static void buddy_try_history_command(buddy_state_t *state, const char *line, size_t length)
+{
+    static const char *const prefix = "{\"cmd\":\"history_add\",";
+    cJSON *root;
+    const cJSON *cmd;
+    const cJSON *body;
+
+    if (state == NULL || line == NULL || length < sizeof("{\"cmd\":\"history_add\",") - 1U) {
+        return;
+    }
+    /* 粗筛（绝大多数 RX 都不是这条命令，别白白 parse） */
+    if (memcmp(line, prefix, sizeof("{\"cmd\":\"history_add\",") - 1U) != 0) {
+        return;
+    }
+    root = cJSON_ParseWithLength(line, length);
+    if (root == NULL) {
+        return;
+    }
+    cmd = cJSON_GetObjectItemCaseSensitive(root, "cmd");
+    body = cJSON_GetObjectItemCaseSensitive(root, "body");
+    if (cJSON_IsString(cmd) && strcmp(cmd->valuestring, "history_add") == 0 &&
+        cJSON_IsString(body) && body->valuestring != NULL) {
+        buddy_state_push_history(state, body->valuestring);
+    }
+    cJSON_Delete(root);
+}
+
 static void buddy_try_settings_command(buddy_state_t *state, const char *line, size_t length)
 {
     static const char *const cmd_key = "\"cmd\":\"settings\"";
@@ -1405,6 +1438,7 @@ static bool buddy_handle_rx(buddy_state_t *state, buddy_rx_slot_t *slot,
 
     buddy_try_volume_command(slot->data, slot->length);
     buddy_try_settings_command(state, slot->data, slot->length);
+    buddy_try_history_command(state, slot->data, slot->length);
     (void)event;
     return buddy_orchestrator_process_rx(state, &ops, slot->data, slot->length,
                                          slot->connection_generation, now_ms, action);

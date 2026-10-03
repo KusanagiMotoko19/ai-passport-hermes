@@ -73,3 +73,5 @@ void buddy_state_init(buddy_state_t *state, const buddy_settings_snapshot_t *set
 void buddy_state_reduce(buddy_state_t *state, const buddy_event_t *event,
                         uint64_t now_ms, buddy_action_t *action);
 void buddy_state_snapshot(const buddy_state_t *state, buddy_ui_snapshot_t *snapshot);
+/* 10/03 晚：桥在连接后把最近几条摘要补推下来填历史（不切页、不动当前正文）。 */
+void buddy_state_push_history(buddy_state_t *state, const char *body);

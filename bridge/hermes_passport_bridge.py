@@ -641,6 +641,35 @@ def read_last_final_reply(session_id: str):
         return None
 
 
+HISTORY_SNAPSHOT_COUNT = 10       # 连上后重放多少条摘要给设备（填翻页历史）
+
+
+def read_recent_final_replies(session_id: str, count: int = HISTORY_SNAPSHOT_COUNT) -> list:
+    """该会话最近 count 条「最终答复」的正文，**按旧→新排列**。
+
+    给设备补历史用：设备的历史只在内存里，一重启就清空 —— 桥每次连上后重放一遍，
+    「翻之前的对话」就回来了。返回旧→新是因为设备端是「新的压在最前面」。
+    """
+    if not session_id or count <= 0:
+        return []
+    try:
+        con = _db()
+        try:
+            rows = con.execute(
+                "SELECT content FROM messages "
+                "WHERE session_id = ? AND role = 'assistant' "
+                "AND COALESCE(finish_reason, '') = 'stop' "
+                "AND content IS NOT NULL AND TRIM(content) <> '' "
+                "ORDER BY id DESC LIMIT ?",
+                (session_id, count),
+            ).fetchall()
+        finally:
+            con.close()
+    except Exception:                                   # noqa: BLE001
+        return []
+    return [str(row[0]) for row in reversed(rows)]
+
+
 def latest_message_id(session_id: str) -> int:
     if not session_id:
         return 0
@@ -843,6 +872,10 @@ class Bridge:
                 if self.last_pushed_body:
                     log(f"设备重连：补推最后一条正文（{len(self.last_pushed_body.encode('utf-8'))} 字节）")
                     await self._send(jline({"cmd": "text", "body": self.last_pushed_body}))
+                # 再重放最近几条摘要，把翻页历史填回来。
+                #   顺序讲究：必须在补推当前正文**之后** —— 设备的 push 是「新的在前」，
+                #   重放是旧→新，最后落地的那条才会成为 history[0]（最新）。
+                await self._replay_history()
                 while client.is_connected and not self.stop_flag.is_set():
                     # 兜底①：开录后一直「没人说话」（没有任何音频，或只有底噪）→ 自动关麦 +
                     # 两声「滴滴」（科长 10/03 定）。⚠ 判据是 **RMS 过线的说话时刻**，不是
@@ -925,6 +958,33 @@ class Bridge:
                     self.client = None
             if not self.stop_flag.is_set():
                 await asyncio.sleep(self.cfg["reconnect_seconds"])
+
+    async def _replay_history(self) -> None:
+        """连上后把最近几条摘要重放给设备 —— 补回它的翻页历史（设备重启会清空）。
+
+        只发 `history_add`：设备端只入库、不切页、不动当前正文，所以不会闪屏。
+        10 条约 2.4KB，按 0.25 秒间隔发完，避免灌满 BLE 写队列。
+        """
+        try:
+            session_id = read_active_session().get("session_id", "")
+            replies = read_recent_final_replies(session_id, HISTORY_SNAPSHOT_COUNT)
+        except Exception as exc:                        # noqa: BLE001
+            log(f"历史补推：读库失败 {exc}")
+            return
+        sent = 0
+        for raw in replies:
+            body = extract_card(raw, BODY_MAX_BYTES)
+            if not body:
+                continue
+            try:
+                await self._send(jline({"cmd": "history_add", "body": body}))
+            except Exception as exc:                    # noqa: BLE001
+                log(f"历史补推：发送中断 {exc}")
+                break
+            sent += 1
+            await asyncio.sleep(0.25)
+        if sent:
+            log(f"历史补推：已重放 {sent} 条摘要（翻页历史已恢复）")
 
     async def _send(self, payload: bytes) -> None:
         client = self.client
