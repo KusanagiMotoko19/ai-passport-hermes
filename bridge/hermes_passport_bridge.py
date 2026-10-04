@@ -691,6 +691,9 @@ def clean_for_device(text: str) -> str:
     # 剥掉 HTML 注释：Hermes 每条回复开头的 <!--SPK ...--> 要点块是给播报层读的，
     # 推到设备屏上只会白占一屏（设备正文上限 512 字节）。
     out = re.sub(r"<!--.*?-->", "", out, flags=re.S)
+    # ⚠ 兜底：结尾不是 -->（例如误写成中文 】）的注释，上面那条剥不掉 ——
+    #   这里按"以 <!--SPK 开头那一行"整行删掉，不让标记漏到设备屏上（10/04 bug）。
+    out = re.sub(r"<!--\s*SPK\b[^\n]*", "", out, flags=re.S)
     out = re.sub(r"```.*?```", "", out, flags=re.S)
     out = re.sub(r"`([^`]*)`", r"\1", out)
     out = re.sub(r"!\[[^\]]*\]\([^)]*\)", "", out)
@@ -705,7 +708,23 @@ def clean_for_device(text: str) -> str:
     return out.strip()
 
 
-SPK_RE = re.compile(r"<!--\s*SPK\s*(.*?)-->", re.S)
+# ⚠ 结尾必须容错：规范是 `-->`，但写成中文 `】`（或干脆漏写）时，原来的
+#   `<!--\s*SPK\s*(.*?)-->` 匹配不到 → 整段 `<!--SPK …】` 被当成"没有要点块"时的
+#   第一段原文，原样推上设备屏（10/04 连拍实锤：屏上直接显示 `<!--SPK …】`，
+#   又难看又白占一屏）。所以这里只抓"以 <!--SPK 开头的那一行"，首尾标记一律
+#   交给 _strip_spk 剥。
+SPK_RE = re.compile(r"<!--\s*SPK\b[^\n]*", re.S)
+
+
+def _strip_spk(text: str) -> str:
+    """剥掉 SPK 块的首尾标记。
+
+    开头：`<!--SPK` / `<!-- SPK` / 带中英文冒号都认。
+    结尾：`-->`、误写的 `】`、或什么都没有 —— 都能剥干净。
+    """
+    out = re.sub(r"^\s*<!--\s*SPK\b[：:]?\s*", "", text or "")
+    out = re.sub(r"\s*(?:-->|】)\s*$", "", out)
+    return out.strip()
 
 # 录音期间，设备会把控制 JSON 直接追加在音频包尾巴上（同一个 notify）。
 # 这里用来把控制行从裸字节流里挖出来（详见 _on_notify 的说明）。
@@ -724,9 +743,13 @@ def extract_card(text: str, limit: int) -> str:
     """
     m = SPK_RE.search(text or "")
     if m:
-        src = m.group(1)
+        src = _strip_spk(m.group(0))
     else:
         src = re.split(r"\n\s*\n", (text or "").strip(), maxsplit=1)[0]
+        # ⚠ 兜底路径也要剥一次。10/04 那个"标记原样上屏"的 bug 就出在这条路上：
+        #   当时 SPK_RE 要求规范结尾 -->，我写成 】 就匹配不到，直接走兜底取第一段，
+        #   而 clean_for_device 的 `<!--.*?-->` 同样剥不掉没有 --> 的注释 → 原样上屏。
+        src = _strip_spk(src)
         limit = min(limit, 240)          # 约 80 汉字，宁可少也不要灌屏
     return truncate_utf8(clean_for_device(src), limit)
 
